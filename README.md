@@ -1,5 +1,7 @@
 # AutoDL × SwanLab Dashboard
 
+简体中文 | [English](README_EN.md)
+
 把 AutoDL 机器、GPU 状态和 SwanLab 实验放在同一个看板中。
 
 ## 作者的话
@@ -28,7 +30,7 @@ python3 install.py
 ~/.local/bin/autodl setup
 ```
 
-安装器会创建独立 Python 环境并安装 SwanLab。运行后打开「连接配置」，看板地址为 [http://127.0.0.1:8766](http://127.0.0.1:8766)。私有仓库阶段需要有访问权限的 GitHub 账号。
+安装器会创建独立 Python 环境并安装 SwanLab。运行后打开「连接配置」，看板地址为 [http://127.0.0.1:8766](http://127.0.0.1:8766)。
 
 想在终端直接使用 `autodl`，将下面一行加入 `~/.zshrc` 或 `~/.bashrc`，重新打开终端：
 

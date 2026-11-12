@@ -7,7 +7,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parent
 RUNTIME_FILES = ('autodl.py', 'server.py', 'remote_probe.py', 'experiment_names.py',
                  'swanlab_bridge.py', 'swanlab_config.py', 'install.py', 'install-key.exp',
-                 'requirements.txt', 'README.md', 'package.py', '.gitignore')
+                 'requirements.txt', 'README.md', 'README_EN.md', 'package.py', '.gitignore')
 
 
 def build(destination=None):
