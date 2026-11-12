@@ -11,7 +11,7 @@ RUNTIME_FILES = ('autodl.py', 'server.py', 'remote_probe.py', 'experiment_names.
 
 
 def build(destination=None):
-    destination = Path(destination) if destination else ROOT / 'dist' / 'autodl-dashboard.zip'
+    destination = Path(destination) if destination else ROOT / 'dist' / 'autodl-swanlab-dashboard.zip'
     files = [ROOT / name for name in RUNTIME_FILES]
     files += sorted((ROOT / 'static').glob('*'))
     files += sorted((ROOT / 'examples').glob('*.json'))
@@ -21,7 +21,7 @@ def build(destination=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, 'w', zipfile.ZIP_DEFLATED) as bundle:
         for source in files:
-            bundle.write(source, 'autodl-dashboard/' + source.relative_to(ROOT).as_posix())
+            bundle.write(source, 'autodl-swanlab-dashboard/' + source.relative_to(ROOT).as_posix())
     return destination
 
 
