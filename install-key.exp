@@ -1,0 +1,10 @@
+set timeout 25
+log_user 0
+gets stdin password
+spawn -noecho {*}$argv
+expect {
+    -re {(?i)password:} { send -- "$password\r"; set password ""; exp_continue }
+    -re {Permission denied} { exit 10 }
+    timeout { exit 11 }
+    eof { set result [wait]; exit [lindex $result 3] }
+}

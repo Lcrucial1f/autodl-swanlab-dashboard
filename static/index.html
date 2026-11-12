@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="autodl-token" content="__TOKEN__">
+  <title>AutoDL · 算力总览</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="AutoDL 看板首页"><img src="/icon.svg" alt="" width="34" height="34"><span>AutoDL<small>算力工作台</small></span></a>
+    <div class="sidebar-section">工作空间</div>
+    <a class="nav-overview" href="#overview" aria-current="page"><span data-icon="grid"></span>算力总览<span class="nav-indicator"></span></a>
+    <div class="sidebar-section region-nav-label">实例区域</div>
+    <nav id="region-nav" aria-label="跳转区域"></nav>
+    <div class="sidebar-bottom"><div class="connection-label"><i></i>本地连接<span>SSH</span></div><p>实时掌握每一张 GPU</p><button id="theme-button" class="theme-button" aria-label="切换深色主题"><span data-icon="moon"></span><span class="theme-label">深色主题</span><span class="theme-shortcut">◐</span></button></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb"><span class="mobile-brand">AutoDL</span><span class="desktop-breadcrumb">工作空间<span class="slash">/</span></span><strong>算力总览</strong></div><div class="top-right"><span class="live-badge"><i></i>实时监控</span><button id="setup-button" class="button"><span data-icon="terminal"></span>连接配置</button><button id="settings-button" class="button ghost" aria-label="分区设置" title="分区设置"><span data-icon="settings"></span>分区设置</button></div></header>
+    <main id="overview">
+      <div class="page-heading"><div><div class="heading-kicker">你的算力，全局可见</div><h1>算力总览<span id="fleet-count"></span></h1><p>从 GPU 到实验，每台机器的运行状态一目了然。</p></div><div class="refresh-area"><span id="update-time">正在连接实例…</span><button class="button" id="refresh-button"><span data-icon="refresh"></span>立即刷新</button></div></div>
+      <div id="banner" class="banner" role="status" hidden></div>
+      <section id="welcome" class="welcome" hidden aria-labelledby="welcome-title"><div class="welcome-symbol"><span data-icon="server"></span></div><div class="welcome-copy"><div class="heading-kicker">第一次使用</div><h2 id="welcome-title">连接你的第一台训练机器</h2><p>从 AutoDL 控制台复制 SSH 命令，添加实例后即可查看 GPU。连接 SwanLab 后，还能同步实验名称。</p><div class="welcome-steps"><span><b>01</b> 添加 SSH 实例</span><span><b>02</b> 连接 SwanLab</span><span><b>03</b> 查看运行状态</span></div></div><button id="welcome-setup" class="button primary">开始配置 <span data-icon="arrow"></span></button></section>
+      <section id="stats" class="stats" aria-label="算力汇总"></section>
+      <div class="toolbar"><div class="filters" role="group" aria-label="筛选实例"><button class="selected" data-filter="all">全部实例</button><button data-filter="busy">运行中</button><button data-filter="idle">有空闲卡</button><button data-filter="offline">离线</button></div><label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="搜索实例、项目或实验" aria-label="搜索实例、项目或实验"><kbd>/</kbd></label></div>
+      <div id="regions" aria-live="off"><div class="empty">正在查询已登记的实例…</div></div>
+      <footer><span><i class="legend-dot busy"></i>运行 / 占用 <i class="legend-dot idle"></i>空闲 <i class="legend-dot unknown"></i>未知</span><span>自动更新 <span class="footer-dot">·</span> SwanLab 实验关联</span></footer>
+      <details class="status-help"><summary>状态如何判断？</summary><p>空闲判定：无 GPU 计算进程、显存使用低于 512 MiB、利用率低于 5%。瞬时状态不代表资源已预留；离线或过期数据不计入可用资源。</p></details>
+    </main>
+  </div>
+  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><span class="dialog-symbol" data-icon="settings"></span><h2>分区与实例</h2><p>按你的习惯，组织每一台机器。</p><button type="button" id="close-settings" class="icon-button" aria-label="关闭设置">×</button></div><div class="dialog-body"><div class="field-heading"><h3>区域与顺序</h3><button type="button" id="add-region" class="text-button">＋ 添加区域</button></div><div id="region-fields"></div><h3 class="instance-fields-title">实例名称与归属</h3><div id="instance-fields"></div><p class="settings-note">新增机器：<code>autodl add</code><br>移除已释放的机器：<code>autodl remove 编号</code>。看板会自动同步。</p><p id="settings-error" role="alert"></p></div><div class="dialog-footer"><button type="button" id="cancel-settings" class="button">取消</button><button type="submit" class="button primary" id="save-settings">保存设置</button></div></form></dialog>
+  <dialog id="rename-dialog" aria-labelledby="rename-title"><form id="rename-form"><div class="dialog-heading"><span class="dialog-symbol" data-icon="edit"></span><h2 id="rename-title">修改实验名称</h2><p>保存后会同步修改 SwanLab 中的实验名称。</p><button type="button" id="close-rename" class="icon-button" aria-label="关闭修改名称">×</button></div><div class="dialog-body rename-body"><dl class="rename-context"><div><dt>所属项目</dt><dd id="rename-project"></dd></div><div><dt>当前名称</dt><dd id="rename-current"></dd></div></dl><label class="rename-field" for="rename-name">新实验名称<input id="rename-name" name="name" type="text" maxlength="100" required autocomplete="off" aria-describedby="rename-help rename-error"></label><p id="rename-help">最多 100 个字符；实验链接和已记录的训练数据保持不变。</p><p id="rename-progress" role="status" aria-live="polite"></p><p id="rename-error" role="alert"></p></div><div class="dialog-footer"><button type="button" id="cancel-rename" class="button">取消</button><button type="submit" class="button primary" id="save-rename">保存并同步</button></div></form></dialog>
+  <dialog id="setup-dialog" aria-labelledby="setup-title">
+    <div class="dialog-heading"><span class="dialog-symbol" data-icon="terminal"></span><h2 id="setup-title">连接配置</h2><p>把你的训练机器和实验账号连接到这台电脑。</p><button type="button" id="close-setup" class="icon-button" aria-label="关闭连接配置">×</button></div>
+    <div class="setup-tabs" role="tablist" aria-label="连接类型"><button id="setup-tab-instances" role="tab" aria-selected="true" aria-controls="setup-instances" data-setup-tab="instances">AutoDL 实例 <span id="setup-instance-count">0</span></button><button id="setup-tab-swanlab" role="tab" aria-selected="false" aria-controls="setup-swanlab" tabindex="-1" data-setup-tab="swanlab">SwanLab 账号 <i id="setup-swan-indicator"></i></button></div>
+    <div class="dialog-body setup-body">
+      <p id="setup-loading" class="setup-feedback" role="status">正在读取本地配置…</p><p id="setup-error" class="setup-feedback error" role="alert"></p>
+      <section id="setup-instances" role="tabpanel" aria-labelledby="setup-tab-instances">
+        <div class="setup-intro"><h3>添加实例</h3><p>在 AutoDL 控制台复制实例的 SSH 命令。通过 SSH 连接，无需在这里登录 AutoDL 网站账号。</p></div>
+        <form id="instance-add-form" autocomplete="off">
+          <label class="setup-field">SSH 命令 <input id="instance-command" type="text" placeholder="ssh -p 12345 root@connect.example.com" required spellcheck="false" autocomplete="off"><small>只粘贴命令，密码在下方单独填写。</small></label>
+          <div class="setup-form-grid"><label class="setup-field">快捷别名 <span class="optional">可选</span><input id="instance-name" type="text" maxlength="64" placeholder="例如 train-01" autocomplete="off"></label><label class="setup-field">所属区域 <span class="optional">可选</span><input id="instance-region" type="text" maxlength="30" placeholder="例如 内蒙区；留空自动识别" list="setup-region-options" autocomplete="off"><datalist id="setup-region-options"></datalist></label></div>
+          <label class="setup-field">SSH 密码 <span class="optional">首次配置免密时填写</span><input id="instance-password" type="password" placeholder="已有免密连接可留空" autocomplete="new-password"><small>仅用于本次安装 SSH 公钥，不保存密码。</small></label>
+          <details class="setup-advanced"><summary>使用已有私钥</summary><label class="setup-field">本机私钥路径<input id="instance-key-file" type="text" placeholder="例如 ~/.ssh/id_ed25519" spellcheck="false" autocomplete="off"><small>路径属于运行看板的电脑；该私钥需已获实例授权。</small></label></details>
+          <div class="setup-form-footer"><p id="instance-add-message" class="setup-feedback" role="status"></p><button id="instance-add-submit" class="button primary" type="submit">添加并连接</button></div>
+        </form>
+        <div class="setup-divider"></div><div class="setup-list-heading"><h3>已登记实例 <span id="setup-list-count"></span></h3><button class="text-button" type="button" id="reload-setup">重新读取</button></div><div id="setup-instance-list" class="setup-instance-list"></div>
+        <details class="setup-advanced setup-local"><summary>本地配置与手动接入</summary><p>已有配置会自动读取。也可以运行 <code>autodl add</code> 添加实例，运行 <code>autodl key 编号</code> 重新配置免密。</p><dl class="setup-paths"><div><dt>实例清单</dt><dd id="setup-registry-path"></dd></div><div><dt>配置目录</dt><dd id="setup-config-path"></dd></div></dl><p id="setup-ssh-status"></p><div id="setup-public-key-wrap" hidden><label class="setup-field">本机 SSH 公钥<textarea id="setup-public-key" readonly rows="3" spellcheck="false" aria-label="本机 SSH 公钥"></textarea></label><button type="button" id="copy-public-key" class="button">复制公钥</button></div><p id="setup-no-key">还没有生成公钥。运行 <code>autodl pubkey</code> 创建并查看，然后可在 AutoDL 控制台添加。</p></details>
+      </section>
+      <section id="setup-swanlab" role="tabpanel" aria-labelledby="setup-tab-swanlab" hidden>
+        <div class="setup-intro"><h3>连接 SwanLab</h3><p>用于读取云端实验名称，以及把你在看板中的改名同步到 SwanLab。无需登录也能查看机器的 GPU 状态。</p></div>
+        <div id="swan-account" class="swan-account"><span class="account-symbol">S</span><div><strong id="swan-account-title">正在检查</strong><p id="swan-account-message"></p><span id="swan-account-source"></span></div><button type="button" id="swan-check" class="button">检查连接</button></div>
+        <div id="swan-install-help" class="setup-note" hidden><strong>需要安装 SwanLab SDK</strong><p>在项目目录运行 <code>python3 install.py</code>，或在要使用的 Python 环境运行：</p><code class="setup-command">python -m pip install -r requirements.txt</code><p>安装后点击“检查连接”。</p></div>
+        <form id="swan-login-form" autocomplete="off"><label class="setup-field">SwanLab API Key<input id="swan-api-key" type="password" placeholder="填写后验证并保存到本机" autocomplete="new-password"><small>在 <a href="https://swanlab.cn/settings" target="_blank" rel="noopener noreferrer">SwanLab 个人设置 ↗</a> 中获取。密钥仅保存在当前电脑，不随项目分享。</small></label><details class="setup-advanced"><summary>Python 环境设置</summary><label class="setup-field">Python 解释器路径<input id="swan-python" type="text" placeholder="留空自动检测" spellcheck="false" autocomplete="off"><small>如果 SwanLab 安装在其他环境，可填写该环境的 Python 路径。</small></label><p id="swan-detected-python"></p></details><div class="setup-form-footer"><p id="swan-login-message" class="setup-feedback" role="status"></p><button type="submit" id="swan-login-submit" class="button primary">验证并保存</button></div></form>
+        <div class="setup-note"><strong>已经在终端登录过？</strong><p>看板会读取本机 SwanLab 登录配置和环境变量。点击“检查连接”即可验证；也可在对应 Python 环境中运行 <code>swanlab login</code> 后重试。</p></div>
+        <div id="swan-clear-wrap" class="swan-clear" hidden><button type="button" class="text-button" id="swan-clear">清除本工具保存的凭据</button><span>清除后恢复读取系统登录，不会退出其他工具的账号。</span></div><div id="swan-clear-confirm" class="setup-confirm" hidden><p>清除本工具保存的 API Key？系统已有的 SwanLab 登录不受影响。</p><div><button type="button" id="swan-clear-cancel" class="button">保留</button><button type="button" id="swan-clear-submit" class="button danger">确认清除</button></div></div>
+      </section>
+    </div><div class="dialog-footer setup-footer"><span id="setup-footer-status">配置保存在当前电脑</span><button type="button" id="finish-setup" class="button">完成</button></div>
+  </dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

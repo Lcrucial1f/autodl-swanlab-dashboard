@@ -1,0 +1,13 @@
+{
+  "next_id": 2,
+  "instances": [
+    {
+      "id": 1,
+      "name": "training-1",
+      "region": "nmb2",
+      "host": "machine.example.invalid",
+      "port": 2200,
+      "user": "root"
+    }
+  ]
+}
