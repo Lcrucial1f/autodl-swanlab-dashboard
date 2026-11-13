@@ -86,6 +86,33 @@ def candidate_dirs(members):
     return dirs
 
 
+def open_run_dirs(members):
+    """Locate custom log directories using files already opened by the task."""
+    folders, seen = set(), set()
+    for process in members:
+        try:
+            descriptors = list((Path('/proc') / str(process['pid']) / 'fd').iterdir())
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                target = os.readlink(descriptor)
+                if target in seen:
+                    continue
+                seen.add(target)
+                path = Path(target)
+                if not path.is_absolute() or path.suffix not in ('.swanlab', '.log'):
+                    continue
+                for folder in path.parents:
+                    if re.fullmatch(r'run-\d{8}_\d{6}-.+', folder.name):
+                        folders.add(folder.resolve())
+                        break
+            except (OSError, RuntimeError):
+                # A process can close a file or exit while the snapshot is read.
+                continue
+    return folders
+
+
 HEADER_READER = r'''
 import json,sys
 from swanlab.sdk.internal.core_python.store import DataStoreReader
@@ -108,32 +135,40 @@ finally:
 def experiment_for(members, hostname):
     pids = {p['pid']: p for p in members}
     matches = []
+    # Open files identify the exact run even when a custom log_dir is deeply
+    # nested, or newer inactive folders push it outside the directory scan limit.
+    folders = open_run_dirs(members)
     for directory in candidate_dirs(members):
         try:
             runs = sorted(directory.glob('run-*'), key=lambda p: p.stat().st_mtime, reverse=True)[:30]
         except OSError:
             continue
         for folder in runs:
-            meta_path = folder / 'files/swanlab-metadata.json'
             try:
-                meta = json.loads(meta_path.read_text())
-                runtime = meta.get('runtime', meta)
-                pid = int(runtime.get('pid', 0))
-                process = pids.get(pid)
-                if not process or runtime.get('hostname') != hostname:
-                    continue
-                if runtime.get('cwd') and runtime['cwd'] != process['cwd']:
-                    continue
-                stamp = re.match(r'run-(\d{8}_\d{6})-(.+)', folder.name)
-                if not stamp:
-                    continue
-                started = datetime.datetime.strptime(stamp[1], '%Y%m%d_%H%M%S').timestamp()
-                # Reject logs left by an older process that reused the same PID.
-                if started < process['start'] - 10 or started > time.time() + 60:
-                    continue
-                matches.append((folder, process, stamp[2]))
-            except (OSError, ValueError, TypeError):
+                folders.add(folder.resolve())
+            except (OSError, RuntimeError):
                 continue
+    for folder in sorted(folders):
+        meta_path = folder / 'files/swanlab-metadata.json'
+        try:
+            meta = json.loads(meta_path.read_text())
+            runtime = meta.get('runtime', meta)
+            pid = int(runtime.get('pid', 0))
+            process = pids.get(pid)
+            if not process or runtime.get('hostname') != hostname:
+                continue
+            if runtime.get('cwd') and runtime['cwd'] != process['cwd']:
+                continue
+            stamp = re.match(r'run-(\d{8}_\d{6})-(.+)', folder.name)
+            if not stamp:
+                continue
+            started = datetime.datetime.strptime(stamp[1], '%Y%m%d_%H%M%S').timestamp()
+            # Reject logs left by an older process that reused the same PID.
+            if started < process['start'] - 10 or started > time.time() + 60:
+                continue
+            matches.append((folder, process, stamp[2]))
+        except (OSError, ValueError, TypeError):
+            continue
     unique = {str(folder): (folder, p, rid) for folder, p, rid in matches}
     # A long-lived worker can create several sequential runs. Without a unique
     # active run, do not silently select the newest log or mislabel an old run.
