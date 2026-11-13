@@ -17,6 +17,7 @@ I built this dashboard to connect those two views: check GPU resources, open the
 - **Match SwanLab experiments:** Identify the project and experiment running on each machine using training processes and logs.
 - **Open experiments directly:** Jump from an instance to its SwanLab experiment to check training progress.
 - **Sync experiment names both ways:** Rename an experiment in the dashboard or SwanLab and keep the displayed name in sync.
+- **Experiment history:** Review previous names before renaming. See the latest 5 completed runs, and search by current or past name, project, or machine.
 - **Quick SSH access:** Run `autodl` to select a machine, or `autodl 1` to connect directly to instance 1 using your SSH key.
 
 ## Quick start
@@ -68,4 +69,4 @@ autodl config    # Show local configuration paths
 autodl ui stop   # Stop the local dashboard
 ```
 
-Instance and account settings are stored in `~/.config/autodl/`; SSH keys default to `~/.ssh/`. They are not included in the repository or share package. See the [example instance configuration](examples/instances.example.json) for manual setup.
+Instance and account settings and experiment history are stored in `~/.config/autodl/`; SSH keys default to `~/.ssh/`. They are not included in the repository or share package. History accumulates from runs observed by the dashboard; only runs confirmed successful by SwanLab appear as completed. Older account-wide experiments are not imported. See the [example instance configuration](examples/instances.example.json) for manual setup.

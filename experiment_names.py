@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 import threading
 import time
@@ -61,7 +62,8 @@ def run_bridge(payload, runtime=None):
             continue
         row = message.get('progress')
         if isinstance(row, dict) and row.get('path') in payload.get('paths', []):
-            completed[row['path']] = {key: row[key] for key in ('name', 'error') if key in row}
+            completed[row['path']] = {key: row[key] for key in
+                                      ('name', 'error', 'state', 'finished_at', 'created_at') if key in row}
         elif isinstance(message.get('ok'), bool):
             answer = message
     if payload.get('action') != 'read':
@@ -72,26 +74,37 @@ def run_bridge(payload, runtime=None):
         return answer or fallback
     error = answer if answer and not answer.get('ok') else fallback
     for path in payload.get('paths', []):
-        completed.setdefault(path, {'error': error['error'], 'code': error['code']})
+        completed.setdefault(path, {'error': error['error'], 'code': error['code'], 'deferred': True})
     return {'ok': True, 'experiments': completed}
 
 
 class ExperimentNames:
-    def __init__(self, bridge=None):
+    def __init__(self, bridge=None, history=None):
         self.bridge = bridge or run_bridge
+        self.history = history
+        self.history_error = ''
         self.cache = {}
         self.lock = threading.Lock()
         self.operation = threading.Lock()
         self.wake = threading.Event()
 
     def refresh(self, paths):
-        paths = sorted(set(p for p in paths if p))[:100]
+        paths = list(dict.fromkeys(p for p in paths if p))[:100]
         if not paths:
             return
         # Serialize refreshes with mutations so an old response cannot undo a rename.
         with self.operation:
             result = self.bridge({'action': 'read', 'paths': paths})
             entries = result.get('experiments', {}) if result.get('ok') else {}
+            history_errors = []
+            for path in paths:
+                row = entries.get(path) or {'error': result.get('error') or '云端读取失败'}
+                if not row.get('deferred'):
+                    error = self.record_metadata(path, row)
+                    if error:
+                        history_errors.append(error)
+            if history_errors:
+                self.history_error = history_errors[0]
             with self.lock:
                 for path in paths:
                     row = entries.get(path, {})
@@ -103,6 +116,16 @@ class ExperimentNames:
                 # Keep only the active set plus a bounded recent cache.
                 if len(self.cache) > 200:
                     self.cache = {p: self.cache[p] for p in paths if p in self.cache}
+
+    def record_metadata(self, path, row, source='cloud', previous_name=None):
+        if self.history is None:
+            return ''
+        try:
+            self.history.apply_metadata(path, row, source=source, previous_name=previous_name)
+            self.history_error = ''
+        except (OSError, sqlite3.Error):
+            self.history_error = '实验历史保存失败，请检查本地配置目录的权限和可用空间'
+        return self.history_error
 
     def loop(self, provider):
         while True:
@@ -124,6 +147,14 @@ class ExperimentNames:
             result['name_source'] = 'cache' if cached.get('error') else 'cloud'
         else:
             result['name_source'] = 'log'
+            if self.history is not None and path:
+                try:
+                    saved = self.history.detail(path)
+                    if saved and saved.get('name_source') == 'cloud':
+                        result['name'] = saved['name']
+                        result['name_source'] = 'cache'
+                except (OSError, sqlite3.Error):
+                    self.history_error = '实验历史读取失败，请检查本地配置目录'
         result['name_synced_at'] = cached.get('synced_at')
         result['name_sync_error'] = cached.get('error', '')
         return result
@@ -137,6 +168,9 @@ class ExperimentNames:
                                     'expected_name': expected_name})
             row = response.get('experiment', {})
             if response.get('ok') and row.get('name'):
+                warning = self.record_metadata(path, row, source='rename', previous_name=expected_name)
+                if warning:
+                    response = dict(response, warning='SwanLab 名称已更新，但' + warning)
                 with self.lock:
                     self.cache[path] = {'name': row['name'], 'synced_at': time.time(), 'error': ''}
             else:

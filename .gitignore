@@ -25,6 +25,7 @@ swanlab-credentials.json
 status.json
 last.json
 dashboard-process.json
+experiment-history.sqlite3*
 .instances.lock
 autodl.conf
 known_hosts

@@ -46,12 +46,12 @@ const fixture={
       assert.equal(await page.locator('.card').getAttribute('data-instance'),expected);
     }
     await page.getByRole('button',{name:'全部实例',exact:true}).click();
-    await page.getByRole('searchbox').fill('22001');
+    await page.getByRole('searchbox',{name:'搜索实例、项目或实验',exact:true}).fill('22001');
     assert.equal(await page.locator('.card').count(),1);
     assert.equal(await page.locator('.card').getAttribute('data-instance'),'1');
-    await page.getByRole('searchbox').fill('sample-project');
+    await page.getByRole('searchbox',{name:'搜索实例、项目或实验',exact:true}).fill('sample-project');
     assert.equal(await page.locator('.card').count(),1,'Project names should be searchable');
-    await page.getByRole('searchbox').fill('');
+    await page.getByRole('searchbox',{name:'搜索实例、项目或实验',exact:true}).fill('');
     await page.locator('.region-heading').first().click();
     assert.equal(await page.locator('.region').first().locator('.card').count(),0);
     await page.locator('.region-heading').first().click();

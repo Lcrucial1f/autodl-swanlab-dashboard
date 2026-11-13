@@ -16,6 +16,7 @@ const icons = {
  edit:'<path d="m16 3 5 5L8 21H3v-5L16 3Zm-3 3 5 5"/>',
  arrow:'<path d="M6 18 18 6M6 6h12v12"/>',
  chevron:'<path d="m7 10 5 5 5-5"/>',
+ history:'<path d="M3 5v5h5M3 10a9 9 0 1 1 1 7"/><path d="M12 7v5l3 2"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.chip}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));
@@ -30,6 +31,8 @@ $('#theme-button').addEventListener('click',()=>{const theme=document.documentEl
 const token = $('meta[name="autodl-token"]').content;
 let state = null, filter = 'all', query = '', draft = null, fetching = false;
 let stateRevision = 0, renameTarget = null, renameSaving = false;
+let historyRevision, completedItems=[], completedTotal=0, completedQuery='', completedLoaded=false, completedLoading=false, completedRequest=0, completedController, completedTimer, historyReturnPath='';
+const historyPanels=new Map();
 const collapsed = new Set(JSON.parse(localStorage.getItem('autodl-collapsed') || '[]'));
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const gib = (n) => n == null ? '—' : (n / 1024).toFixed(1);
@@ -38,6 +41,92 @@ const count = (i, status) => fresh(i) ? i.gpus.filter(g => g.state === status).l
 const safeUrl = (url) => { try { const u = new URL(url); return u.protocol === 'https:' && u.hostname === 'swanlab.cn' ? u.href : ''; } catch { return ''; } };
 function toast(message) { const el=$('#toast'); el.textContent=message; el.hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(()=>el.hidden=true,2600); }
 async function post(path, data={}) { const res=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Autodl-Token':token},body:JSON.stringify(data)}); const result=await res.json(); if(!res.ok){const error=new Error(result.error||'操作失败');error.status=res.status;error.result=result;throw error;} return result; }
+const hasHistory=()=>state && Object.prototype.hasOwnProperty.call(state,'history_revision');
+function historyTime(value) { if(!value)return '时间未记录';const date=new Date(value*1000);return Number.isNaN(date.getTime())?'时间未记录':date.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}); }
+async function readHistoryApi(path,signal) { const response=await fetch(path,{signal:signal||AbortSignal.timeout(8000)});const result=await response.json();if(!response.ok)throw Error(result.error||'读取失败');return result; }
+function renderCompleted() {
+  const focus=document.activeElement?.closest('[data-history]')?.dataset.history;
+  $('#completed-count').textContent=completedTotal;
+  $('#completed-list').innerHTML=completedItems.map(item=>{
+    const url=safeUrl(item.url),instances=(item.instances||[]).map(i=>i.name||`实例 ${i.id}`).join(' / ');
+    return `<article class="completed-item" data-completed="${esc(item.path)}"><div class="completed-main"><div class="completed-label"><span class="completed-badge">${icon('available')}已完成</span><span class="completed-project" title="${esc(item.workspace)} / ${esc(item.project)}">${esc(item.project||'项目未记录')}</span></div><h3>${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(item.name)}</a>`:esc(item.name)}</h3><div class="completed-meta"><span title="${esc(instances)}">${icon('server')}${esc(instances||'实例未记录')}</span><span>${item.finished_at?'完成于':'确认完成于'} ${esc(historyTime(item.finished_at||item.completed_at))}</span></div></div><div class="completed-actions"><button type="button" class="rename-button" data-history="${esc(item.path)}" aria-label="查看 ${esc(item.name)} 的名称历史">${icon('history')}<span>名称历史${item.history_count?` <small>${Number(item.history_count)||0}</small>`:''}</span></button>${url?`<a class="completed-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" aria-label="打开已完成的 SwanLab 实验 ${esc(item.name)}">SwanLab ${icon('arrow')}</a>`:''}</div></article>`;
+  }).join('');
+  if(focus)document.querySelector(`[data-history="${CSS.escape(focus)}"]`)?.focus({preventScroll:true});
+  $('#completed-status').textContent=completedLoading?(completedItems.length?'正在更新历史…':'正在读取历史…'):!$('#completed-error').hidden?'':!completedItems.length?(completedQuery?'没有找到匹配的实验，试试旧名称、项目或实例。':hasHistory()?'暂无已完成实验。启用后自动记录，由 SwanLab 确认完成后显示在这里。':'历史服务尚未启用，请更新并重启本地服务。'):'';
+  $('#completed-summary').textContent=completedItems.length?`已显示 ${completedItems.length} / ${completedTotal} 个${completedQuery?'匹配实验':'实验 · 最近完成优先'}`:'';
+  $('#completed-more').hidden=completedItems.length>=completedTotal;
+  $('#completed-more').disabled=completedLoading;
+  $('#completed').setAttribute('aria-busy',String(completedLoading));
+}
+async function loadCompleted(append=false) {
+  if(!hasHistory()){renderCompleted();return;}
+  const request=++completedRequest,search=completedQuery,target=append?5:Math.max(5,completedItems.length);
+  completedController?.abort();completedController=new AbortController();
+  completedLoading=true;$('#completed-error').hidden=true;renderCompleted();
+  try {
+    let items=append?[...completedItems]:[],total=0;
+    do {
+      const params=new URLSearchParams({q:search,limit:'5',offset:String(items.length)});
+      const result=await readHistoryApi('/api/experiments/completed?'+params,AbortSignal.any([completedController.signal,AbortSignal.timeout(8000)]));
+      if(request!==completedRequest)return;
+      if(!Array.isArray(result.items))throw Error('历史数据格式不正确');
+      items.push(...result.items);total=Number(result.total)||0;
+      if(append||!result.has_more||!result.items.length)break;
+    } while(items.length<target);
+    completedItems=items;completedTotal=total;completedLoaded=true;
+  } catch(error) {
+    if(request!==completedRequest)return;
+    $('#completed-error-text').textContent='无法读取已完成实验：'+(error.message||'请稍后重试');$('#completed-error').hidden=false;
+  } finally {if(request===completedRequest){completedLoading=false;renderCompleted();}}
+}
+function syncHistory() {
+  if(!hasHistory()){renderCompleted();return;}
+  if((!completedLoaded&&!completedLoading)||historyRevision!==state.history_revision){historyRevision=state.history_revision;clearTimeout(completedTimer);loadCompleted();}
+  if(state.history_error){$('#completed-error-text').textContent='实验历史暂不可用：'+state.history_error;$('#completed-error').hidden=false;}
+}
+$('#completed-search').addEventListener('input',e=>{
+  completedQuery=e.target.value.trim();completedItems=[];completedTotal=0;completedLoaded=false;
+  ++completedRequest;completedController?.abort();clearTimeout(completedTimer);completedLoading=true;$('#completed-error').hidden=true;renderCompleted();
+  completedTimer=setTimeout(()=>loadCompleted(),250);
+});
+$('#completed-more').addEventListener('click',()=>loadCompleted(true));
+$('#completed-retry').addEventListener('click',()=>loadCompleted());
+function renderNameHistory(selector) {
+  const panel=historyPanels.get(selector);if(!panel)return;
+  const root=$(selector),experiment=panel.experiment;
+  if(panel.loading){root.innerHTML='<h3>重命名历史</h3><p class="history-notice" role="status">正在读取名称历史…</p>';return;}
+  if(panel.error){root.innerHTML=`<h3>重命名历史</h3><p class="history-notice error" role="alert">${esc(panel.error)}</p>${hasHistory()?'<button type="button" class="text-button" data-history-retry>重新读取</button>':''}`;return;}
+  const records=[...(experiment?.rename_history||[])].sort((a,b)=>(b.changed_at||0)-(a.changed_at||0));
+  const visible=panel.expanded?records:records.slice(0,5);
+  root.innerHTML=`<div class="history-heading"><h3>重命名历史 <span>${records.length}</span></h3><span>最近在前</span></div><div class="history-original"><span>日志初始名称</span><strong>${esc(experiment?.original_name||'尚未记录')}</strong></div>${visible.length?`<ol class="history-timeline">${visible.map(item=>`<li><div class="history-names"><span class="history-old">${esc(item.old_name)}</span><span class="history-arrow" aria-label="改为">→</span><strong>${esc(item.new_name)}</strong></div><div class="history-meta"><span>${item.source==='cloud'?'云端变化 · 发现于':'看板改名 ·'} ${esc(historyTime(item.changed_at))}</span></div></li>`).join('')}</ol>`:'<p class="history-notice">暂无重命名记录，之后的名称变化会保留在这里。</p>'}${records.length>5?`<button type="button" class="text-button history-expand" data-history-expand aria-expanded="${panel.expanded}">${panel.expanded?'收起历史':`查看全部 ${records.length} 次改名`}</button>`:''}`;
+}
+async function loadNameHistory(selector,path) {
+  const previous=historyPanels.get(selector),request=(previous?.request||0)+1;
+  historyPanels.set(selector,{path,request,loading:true,expanded:false});renderNameHistory(selector);
+  if(!hasHistory()){historyPanels.set(selector,{path,request,error:'历史服务尚未启用。更新服务后会开始记录；当前仍可修改名称。'});renderNameHistory(selector);return;}
+  try {
+    const result=await readHistoryApi('/api/experiments/history?'+new URLSearchParams({path}));
+    if(historyPanels.get(selector)?.request!==request||historyPanels.get(selector)?.path!==path)return;
+    if(!result.experiment||!Array.isArray(result.experiment.rename_history))throw Error('名称历史格式不正确');
+    historyPanels.set(selector,{path,request,experiment:result.experiment,expanded:false});
+    if(selector==='#completed-history'){$('#history-current').textContent=result.experiment.name;$('#history-project').textContent=result.experiment.project||'—';}
+  } catch(error){if(historyPanels.get(selector)?.request!==request)return;historyPanels.set(selector,{path,request,error:'无法读取名称历史：'+error.message+(selector==='#rename-history'?'。仍可修改名称。':'')});}
+  renderNameHistory(selector);
+}
+for(const selector of ['#rename-history','#completed-history'])$(selector).addEventListener('click',e=>{
+  const panel=historyPanels.get(selector);if(!panel)return;
+  if(e.target.closest('[data-history-expand]')){panel.expanded=!panel.expanded;renderNameHistory(selector);$(selector).querySelector('[data-history-expand]')?.focus({preventScroll:true});}
+  if(e.target.closest('[data-history-retry]'))loadNameHistory(selector,panel.path);
+});
+$('#completed-list').addEventListener('click',e=>{
+  const button=e.target.closest('[data-history]');if(!button)return;
+  const item=completedItems.find(item=>item.path===button.dataset.history);if(!item)return;
+  historyReturnPath=item.path;$('#history-project').textContent=item.project||'—';$('#history-current').textContent=item.name;
+  loadNameHistory('#completed-history',item.path);$('#history-dialog').showModal();
+});
+for(const id of ['close-history','finish-history'])$('#'+id).addEventListener('click',()=>$('#history-dialog').close());
+function invalidateHistory(selector) { const panel=historyPanels.get(selector);if(panel)panel.request++; }
+$('#history-dialog').addEventListener('close',()=>{invalidateHistory('#completed-history');const button=document.querySelector(`[data-history="${CSS.escape(historyReturnPath)}"]`);(button||$('#completed-search')).focus({preventScroll:true});});
 function matches(i) {
   const text=[i.name,i.display_name,i.host,i.port,...i.tasks.flatMap(t=>t.experiments.flatMap(e=>[e.name,e.project,e.run_id]))].join(' ').toLowerCase();
   return text.includes(query) && (filter==='all' || filter==='busy' && count(i,'busy')>0 || filter==='idle' && count(i,'idle')>0 || filter==='offline' && i.online===false);
@@ -115,7 +204,7 @@ async function load() {
   if(fetching)return;
   fetching=true;
   const requestRevision=stateRevision;
-  try {const res=await fetch('/api/state',{signal:AbortSignal.timeout(6000)}); if(!res.ok)throw Error('读取失败'); const next=await res.json(); if(requestRevision===stateRevision){state=next;render();}}
+  try {const res=await fetch('/api/state',{signal:AbortSignal.timeout(6000)}); if(!res.ok)throw Error('读取失败'); const next=await res.json(); if(requestRevision===stateRevision){state=next;render();syncHistory();}}
   catch {$('#banner').hidden=false;$('#banner').textContent='本地服务连接中断，当前显示的是上次采样。运行 autodl ui 可以重新打开服务。';$('#update-time').textContent='连接已中断';}
   finally {fetching=false;}
 }
@@ -159,9 +248,11 @@ function openRename(button) {
   $('#rename-name').value=experiment.name;
   $('#rename-error').textContent='';
   $('#rename-progress').textContent=experiment.name_sync_error?'当前显示上次记录的名称。保存前会核对 SwanLab 最新名称。':'';
+  loadNameHistory('#rename-history',experiment.path);
   $('#rename-dialog').showModal();
-  $('#rename-name').focus();
+  $('#rename-name').focus({preventScroll:true});
   $('#rename-name').select();
+  $('.rename-body').scrollTop=0;
 }
 function setRenameBusy(busy) {
   renameSaving=busy;
@@ -173,6 +264,7 @@ function cancelRename() { if(!renameSaving)$('#rename-dialog').close(); }
 for(const id of ['cancel-rename','close-rename'])$('#'+id).addEventListener('click',cancelRename);
 $('#rename-dialog').addEventListener('cancel',e=>{if(renameSaving)e.preventDefault();});
 $('#rename-dialog').addEventListener('close',()=>{
+  invalidateHistory('#rename-history');
   const target=renameTarget;
   renameTarget=null;
   if(target)requestAnimationFrame(()=>{
@@ -197,7 +289,7 @@ $('#rename-form').addEventListener('submit',async e=>{
     render();
     setRenameBusy(false);
     $('#rename-dialog').close();
-    toast('实验名称已同步到 SwanLab');
+    toast(result.warning?'名称已同步；'+result.warning:'实验名称已同步到 SwanLab');
     await load();
   } catch(error) {
     $('#rename-error').textContent=error.message || '同步失败，请稍后重试';

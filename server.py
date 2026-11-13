@@ -11,13 +11,16 @@ import platform
 import secrets
 import signal
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 import webbrowser
 from experiment_names import ExperimentNames, experiment_path
+from experiment_history import ExperimentHistory
 import autodl as CLI
 import swanlab_config
 
@@ -117,19 +120,53 @@ def probe(item):
 
 
 class Monitor:
-    def __init__(self):
+    def __init__(self, history=None, history_error=''):
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.samples = {}
         self.updated = 0
         self.refreshing = True
         self.error = ''
-        self.names = ExperimentNames()
+        self.history = history if history is not None else ExperimentHistory(':memory:')
+        self.history_error = ''
+        self.startup_history_error = history_error
+        self.names = ExperimentNames(history=self.history)
 
     def experiment_paths(self):
         with self.lock:
             return {experiment_path(e) for sample in self.samples.values()
                     for task in sample.get('tasks', []) for e in task.get('experiments', [])} - {''}
+
+    def sync_paths(self):
+        active = sorted(self.experiment_paths())
+        try:
+            # Oldest checks first, including finished/interrupted runs that might resume.
+            paths = self.history.sync_paths(limit=100)
+            # Newly discovered live identities can appear before the next storage sample.
+            paths += active
+        except (OSError, sqlite3.Error):
+            self.history_error = '实验历史读取失败，请检查本地配置目录'
+            paths = active
+        return list(dict.fromkeys(paths))[:100]
+
+    def observe_history(self):
+        try:
+            settings = get_settings()
+            with self.lock:
+                samples = copy.deepcopy(self.samples)
+            instances = []
+            for item in CLI.load()['instances']:
+                override = settings['instances'].get(str(item['id']), {})
+                sample = samples.get(str(item['id']), {})
+                instances.append(dict(sample, id=item['id'],
+                                      display_name=override.get('name') or '实例 ' + str(item['port']),
+                                      region=override.get('region', item['region'])))
+            self.history.observe(instances)
+            self.history_error = ''
+            return True
+        except (OSError, ValueError, KeyError, sqlite3.Error):
+            self.history_error = '实验历史保存失败，请检查本地配置目录的权限和可用空间'
+            return False
 
     def loop(self):
         observed_paths = set()
@@ -156,6 +193,7 @@ class Monitor:
                     self.updated = time.time()
                     self.error = ''
                 paths = self.experiment_paths()
+                self.observe_history()
                 if paths != observed_paths:
                     self.names.wake.set()
                     observed_paths = paths
@@ -188,7 +226,9 @@ class Monitor:
             items.append(dict(public_instance(item), **sample, display_name=override.get('name') or '实例 ' + str(item['port']),
                               region=region, stale=age > 30))
         return {'instances': items, 'regions': regions, 'updated_at': updated,
-                'refreshing': refreshing, 'interval': INTERVAL, 'error': error, 'setup_needed': not items}
+                'refreshing': refreshing, 'interval': INTERVAL, 'error': error, 'setup_needed': not items,
+                'history_revision': self.history.revision,
+                'history_error': self.startup_history_error or self.history_error or self.names.history_error}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -232,6 +272,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(200, self.monitor.snapshot())
             except (OSError, ValueError, KeyError):
                 return self.send(500, {'error': '本地配置无法读取，请检查实例清单'})
+        if path in ('/api/experiments/completed', '/api/experiments/history'):
+            try:
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True, max_num_fields=10)
+                if path.endswith('/history'):
+                    identity = query.get('path', [''])[0]
+                    if len(identity) > 1540:
+                        raise ValueError('实验路径无效')
+                    experiment = self.monitor.history.detail(identity)
+                    if experiment is None:
+                        return self.send(404, {'error': '尚未记录该实验，请稍后刷新'})
+                    return self.send(200, {'experiment': experiment})
+                search = query.get('q', [''])[0].strip()
+                limit, offset = int(query.get('limit', ['5'])[0]), int(query.get('offset', ['0'])[0])
+                if len(search) > 500 or not 1 <= limit <= 100 or not 0 <= offset <= 1000000000:
+                    raise ValueError('搜索或分页参数无效')
+                return self.send(200, self.monitor.history.search(search, limit, offset))
+            except (ValueError, TypeError):
+                return self.send(400, {'error': '搜索或分页参数无效'})
+            except (OSError, sqlite3.Error):
+                return self.send(500, {'error': '实验历史无法读取，请检查本地配置目录'})
         if path == '/':
             return self.send(200, (ROOT / 'static/index.html').read_text().replace('__TOKEN__', self.token), 'text/html; charset=utf-8')
         static = {'/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'), '/icon.svg': ('icon.svg', 'image/svg+xml')}
@@ -262,6 +322,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     raise ValueError('修改请求格式不正确')
                 if not isinstance(data['path'], str) or data['path'] not in self.monitor.experiment_paths():
                     return self.send(404, {'error': '该实验已不在当前实例列表中，请刷新后重试'})
+                if self.monitor.startup_history_error or not self.monitor.observe_history():
+                    return self.send(503, {'error': '本地历史暂时无法保存，请修复配置目录后再改名'})
                 result = self.monitor.names.rename(data['path'], data['name'], data['expected_name'])
                 status = 200 if result.get('ok') else 409 if result.get('code') == 'conflict' else 502
                 return self.send(status, result)
@@ -373,12 +435,15 @@ def health():
 
 
 def serve():
-    monitor = Monitor()
+    try:
+        monitor = Monitor(history=ExperimentHistory(BASE / 'experiment-history.sqlite3'))
+    except (OSError, sqlite3.Error):
+        monitor = Monitor(history_error='历史数据库无法读取，本次记录仅临时保留；请检查本地配置目录并重启看板')
     Handler.monitor = monitor
     server = http.server.ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
     server.daemon_threads = True
     threading.Thread(target=monitor.loop, daemon=True).start()
-    threading.Thread(target=monitor.names.loop, args=(monitor.experiment_paths,), daemon=True).start()
+    threading.Thread(target=monitor.names.loop, args=(monitor.sync_paths,), daemon=True).start()
     threading.Thread(target=swanlab_config.setup_status, daemon=True).start()
     print(URL, flush=True)
     server.serve_forever()

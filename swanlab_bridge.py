@@ -1,5 +1,6 @@
 """SwanLab metadata adapter. Requests arrive on stdin; credentials stay in SDK."""
 import contextlib
+from datetime import datetime
 import io
 import json
 import sys
@@ -24,7 +25,27 @@ def metadata(client, path):
     data = client.request('GET', route_for(path), retries=0, timeout=5, log_error=False).data
     if not isinstance(data, dict) or not data.get('name') or not data.get('cuid'):
         raise ValueError('SwanLab 未返回完整实验信息')
-    return {'path': path, 'name': data['name'], 'cuid': data['cuid']}
+    state = data.get('state')
+    return {
+        'path': path, 'name': data['name'], 'cuid': data['cuid'],
+        'state': state.strip().upper() if isinstance(state, str) else '',
+        # These are the same fields exposed by the SDK's Run properties.
+        'created_at': timestamp_seconds(data.get('createdAt')),
+        'finished_at': timestamp_seconds(data.get('finishedAt')),
+    }
+
+
+def timestamp_seconds(value):
+    """Parse cloud ISO 8601 dates without guessing a missing timezone."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        date = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+        if date.tzinfo is None:
+            return None
+        return date.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def failure(error):
@@ -84,7 +105,8 @@ def main():
     def progress(path, row):
         # Only allow display metadata through while SDK output remains suppressed.
         item = {'path': path}
-        item.update({key: row[key] for key in ('name', 'error') if key in row})
+        item.update({key: row[key] for key in
+                     ('name', 'state', 'created_at', 'finished_at', 'error') if key in row})
         print(json.dumps({'progress': item}, ensure_ascii=False), file=output, flush=True)
 
     try:
